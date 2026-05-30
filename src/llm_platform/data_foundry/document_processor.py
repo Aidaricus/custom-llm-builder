@@ -85,6 +85,8 @@ class DocumentProcessor:
                     overlap_prefix = rough_overlap[first_space:].lstrip()
                 else:
                     overlap_prefix = rough_overlap
+            else:
+                overlap_prefix = prev_chunk
 
             current_chunk = overlap_prefix + " " + text_chunks[i]
             # Ensure we don't massively exceed chunk_size due to overlap
