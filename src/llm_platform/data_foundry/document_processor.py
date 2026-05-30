@@ -26,7 +26,8 @@ class DocumentProcessor:
         self.chunk_overlap = chunk_overlap
         # Hierarchy of separators: Paragraphs -> Lines -> Sentences -> Words
         self.separators = ["\n\n", "\n", ". ", " "]
-    def split_text(self, text: str, separators: List[str]) -> List[str]:
+
+    def _split_text(self, text: str, separators: List[str]) -> List[str]:
         """Recursively splits text to maintain semantic boundaries."""
         if len(text) < self.chunk_size or not separators:
             return [text]
@@ -72,15 +73,29 @@ class DocumentProcessor:
             if i == 0:
                 overlapped_chunks.append(text_chunks[i])
                 continue
-                
+
             # Take the end of the previous chunk as the overlap prefix
             prev_chunk = text_chunks[i-1]
-            overlap_prefix = prev_chunk[-self.chunk_overlap:] if len(prev_chunk) > self.chunk_overlap else prev_chunk
-            
+            if len(prev_chunk) > self.chunk_overlap:
+                rough_overlap = prev_chunk[-self.chunk_overlap:]
+
+                # Find the first space to avoid starting with a cut word (like "aded")
+                first_space = rough_overlap.find(" ")
+                if first_space != -1:
+                    overlap_prefix = rough_overlap[first_space:].lstrip()
+                else:
+                    overlap_prefix = rough_overlap
+
             current_chunk = overlap_prefix + " " + text_chunks[i]
             # Ensure we don't massively exceed chunk_size due to overlap
+            current_chunk = current_chunk.replace("\n", " ").replace("  ", " ")
+
             if len(current_chunk) > self.chunk_size + self.chunk_overlap:
                 current_chunk = current_chunk[:self.chunk_size]
+                # Also ensure we don't end on a cut word
+                last_space = current_chunk.rfind(" ")
+                if last_space != -1:
+                    current_chunk = current_chunk[:last_space]
                 
             overlapped_chunks.append(current_chunk.strip())
             
