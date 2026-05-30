@@ -1,5 +1,4 @@
-git add .gitignore
-git commit -m "chore: ignore python and jupyter cache files"data/
+data/
 .env
 __pycache__/
 *.pyc
