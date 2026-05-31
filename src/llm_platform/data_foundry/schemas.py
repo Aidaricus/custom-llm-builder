@@ -81,3 +81,11 @@ class DPOTriplet(BaseModel):
         default=None, 
         description="Reason for rejection (e.g., 'refusal', 'hallucination', 'too_short')."
     )
+
+
+class LLMGeneratedContent(BaseModel):
+    messages: List[Message] = Field(
+        ...,
+        min_length=1,
+        description="List of generated messages (user and assistant)."
+    )

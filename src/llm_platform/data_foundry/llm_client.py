@@ -77,6 +77,7 @@ class LLMClient:
                 # Force JSON output mode (supported by most OpenRouter models)
                 response_format={"type": "json_object"},
                 temperature=0.3, # Low temperature for more deterministic/factual output
+                max_tokens=4000,
             )
 
             raw_content = response.choices[0].message.content
