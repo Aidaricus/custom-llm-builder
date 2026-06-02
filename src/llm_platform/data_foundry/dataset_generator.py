@@ -19,6 +19,7 @@ class DatasetGenerator:
         self,
         raw_data_dir: str | Path,
         output_dir: str | Path,
+        model_name: str = "google/gemma-4-31b-it:free",
         max_concurrent_requests: int = 5,
     ):
         self.raw_data_dir = Path(raw_data_dir)
@@ -26,7 +27,7 @@ class DatasetGenerator:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         self.processor = DocumentProcessor()
-        self.client = LLMClient()
+        self.client = LLMClient(model_name=model_name)
         
         self.semaphore = asyncio.Semaphore(max_concurrent_requests)
     

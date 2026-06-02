@@ -20,7 +20,7 @@ T = TypeVar("T", bound=BaseModel)
 
 
 class LLMClient:
-    def __init__(self, model_name: str = "openai/gpt-oss-120b"):
+    def __init__(self, model_name: str = "google/gemma-4-31b-it:free"):
         if not OPENROUTER_API_KEY:
             raise ValueError(
                 "OPENROUTER_API_KEY is not set. Please check your .env file."
