@@ -40,7 +40,6 @@ class EvolPipeline:
             return {}
     
     async def _process_single_pair(self, pair: SFTPair) -> Optional[SFTPair]:
-        """Применяет случайную мутацию к одной паре."""
         if not self.evol_prompts:
             logger.error("No evol prompts loaded.")
             return None
@@ -53,16 +52,37 @@ class EvolPipeline:
 
         user_prompt = f"Оригинальный вопрос:\n{original_q}\n\nОригинальный ответ:\n{original_a}"
 
-        mutation_name, system_prompt = random.choice(list(self.evol_prompts.items()))
-        
+        mutation_name, base_system_prompt = random.choice(list(self.evol_prompts.items()))
+
+        # ИСПРАВЛЕНИЕ 1: Усиленный системный промпт для защиты от галлюцинаций
+        system_prompt_enhanced = (
+            f"{base_system_prompt}\n\n"
+            "CRITICAL RULES FOR OUTPUT:\n"
+            "1. The 'user' role MUST contain ONLY the new, realistic question. NEVER include your instructions or meta-prompts (like 'Rewrite this' or 'Add a table') in the user message.\n"
+            "2. The 'assistant' role MUST contain the detailed, accurate answer to the new question.\n"
+            "3. Do NOT wrap the entire dialogue inside the 'assistant' role."
+        )
+
+        user_prompt = f"Original Question:\n{original_q}\n\nOriginal Answer:\n{original_a}\n\nGenerate the evolved User-Assistant pair."
+
         async with self.semaphore:
             try:
                 llm_content = await self.client.generate_structured_data(
-                    system_prompt=system_prompt,
+                    system_prompt=system_prompt_enhanced,
                     user_prompt=user_prompt,
                     response_model=LLMGeneratedContent
                 )
-                await asyncio.sleep(2)
+                await asyncio.sleep(5)
+                
+                messages = llm_content.messages
+                if len(messages) < 2:
+                    raise ValueError("LLM generated fewer than 2 messages (missing user or assistant role).")
+                
+                has_user = any(m.role == "user" for m in messages)
+                has_assistant = any(m.role == "assistant" for m in messages)
+                
+                if not (has_user and has_assistant):
+                    raise ValueError("LLM output is missing either the 'user' or 'assistant' role.")
                 
                 evolved_pair = SFTPair(
                     pair_id=f"evol_{uuid.uuid4().hex[:8]}",
@@ -75,6 +95,9 @@ class EvolPipeline:
                 
                 return evolved_pair
                 
+            except ValueError as ve:
+                logger.warning(f"Validation failed for pair {pair.pair_id}: {ve}")
+                return None
             except Exception as e:
                 logger.error(f"Failed to evolve pair {pair.pair_id}: {e}")
                 return None
