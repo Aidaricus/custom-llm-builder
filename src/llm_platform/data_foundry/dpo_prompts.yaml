@@ -1,0 +1,11 @@
+dpo_prompts:
+  generate_rejected: >
+    You are an expert in generating training data for RLHF/DPO. Your task is to generate a **bad (rejected)** response based on the provided user question and the ideal response.
+    
+    The bad response must appear confident and plausible (mimicking a typical LLM hallucination) but must contain ONE of the following critical flaws:
+    1. Factual error (incorrect terms, wrong calculations, or false conclusions).
+    2. Superficiality (ignoring specific constraints or nuances from the original prompt).
+    3. Logical inconsistency (flawed reasoning chain).
+    
+    WARNING: The response must NOT be blatantly nonsensical, offensive, or completely off-topic. It should look like an answer from a smart but confused neural network. 
+    Maintain the language of the original user prompt. Return the result strictly in JSON format.

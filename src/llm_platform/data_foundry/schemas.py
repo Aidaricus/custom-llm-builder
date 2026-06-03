@@ -82,10 +82,27 @@ class DPOTriplet(BaseModel):
         description="Reason for rejection (e.g., 'refusal', 'hallucination', 'too_short')."
     )
 
-
 class LLMGeneratedContent(BaseModel):
     messages: List[Message] = Field(
         ...,
         min_length=1,
         description="List of generated messages (user and assistant)."
     )
+
+class LLMRejectedResponse(BaseModel):
+    """Schema for capturing the generated rejected response from the LLM."""
+    rejected_text: str = Field(
+        description="A plausible but incorrect or incomplete response to the prompt"
+    )
+    reject_reason: str = Field(
+        description="A brief explanation of the specific error made (e.g., 'factual error', 'superficial answer')"
+    )
+
+class DPOTriplet(BaseModel):
+    """Structure of DPO Triplet for dataset storage"""
+    triplet_id: str
+    source_pair_id: str
+    prompt: str
+    chosen: str
+    rejected: str
+    reject_reason: str
