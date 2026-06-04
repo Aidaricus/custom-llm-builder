@@ -1,0 +1,168 @@
+import json
+import logging
+import asyncio
+from pathlib import Path
+from typing import Dict, List, Any
+from pydantic import BaseModel, Field
+
+from src.llm_platform.data_foundry.llm_client import LLMClient
+
+logger = logging.getLogger(__name__)
+
+
+class LLMJudgeResult(BaseModel):
+    """Schema for LLM-as-a-Judge evaluation result."""
+    is_factual: bool = Field(
+        description="True if the answer is factually correct strictly based on the source text, otherwise False."
+    )
+    reasoning: str = Field(
+        description="Brief explanation of the verdict, pointing out specific errors if any."
+    )
+
+
+class DatasetEvaluator:
+    """
+    Evaluates dataset quality: calculates token/word statistics, 
+    runs LLM-as-a-judge spot checks, and generates a markdown health report.
+    """
+    def __init__(
+        self, 
+        model_name: str,
+        max_concurrent_requests: int = 2
+    ):
+        self.client = LLMClient(model_name=model_name)
+        self.semaphore = asyncio.Semaphore(max_concurrent_requests)
+        self.system_prompt = (
+            "You are a strict data quality editor. Your task is to evaluate whether the Assistant's "
+            "answer to the User's question is factually accurate and free of hallucinations, "
+            "based STRICTLY on the provided Source Text.\n"
+            "Return the result in JSON format."
+        )
+
+    def _calculate_basic_stats(self, dataset_file: Path) -> Dict[str, Any]:
+        """Calculates length distributions and counts for the dataset."""
+        lengths = []
+        with open(dataset_file, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    data = json.loads(line)
+                    # Extract assistant's answer (works for both SFT and DPO structures if we adapt slightly, 
+                    # assuming SFT 'messages' format here)
+                    messages = data.get("messages", [])
+                    answer = next((m["content"] for m in messages if m["role"] == "assistant"), "")
+                    if answer:
+                        lengths.append(len(answer.split()))
+                except json.JSONDecodeError:
+                    continue
+
+        if not lengths:
+            return {"total_pairs": 0, "avg_words": 0, "max_words": 0, "min_words": 0}
+
+        return {
+            "total_pairs": len(lengths),
+            "avg_words": round(sum(lengths) / len(lengths), 2),
+            "max_words": max(lengths),
+            "min_words": min(lengths)
+        }
+
+    async def _evaluate_single_pair(self, pair: Dict, source_text: str) -> bool:
+        """Runs a single LLM-as-a-Judge check."""
+        messages = pair.get("messages", [])
+        question = next((m["content"] for m in messages if m["role"] == "user"), "")
+        answer = next((m["content"] for m in messages if m["role"] == "assistant"), "")
+
+        user_prompt = (
+            f"Source Text:\n{source_text}\n\n"
+            f"User Question:\n{question}\n\n"
+            f"Assistant Answer:\n{answer}\n\n"
+            "Evaluate the answer."
+        )
+
+        async with self.semaphore:
+            try:
+                result = await self.client.generate_structured_data(
+                    system_prompt=self.system_prompt,
+                    user_prompt=user_prompt,
+                    response_model=LLMJudgeResult
+                )
+                await asyncio.sleep(2)
+                return result.is_factual
+            except Exception as e:
+                logger.error(f"Spot check failed: {e}")
+                return False
+
+    async def run_evaluation(
+        self, 
+        sanitized_sft_file: str | Path, 
+        chunks_file: str | Path,
+        report_output_file: str | Path,
+        sanitization_stats: Dict[str, int]
+    ):
+        """Generates the final dataset_health.md report."""
+        sft_path = Path(sanitized_sft_file)
+        chunks_path = Path(chunks_file)
+        report_path = Path(report_output_file)
+
+        # 1. Calculate basic statistics
+        stats = self._calculate_basic_stats(sft_path)
+        
+        # 2. Load source chunks for spot-checking
+        chunks_mapping = {}
+        if chunks_path.exists():
+            with open(chunks_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    chunk_data = json.loads(line)
+                    chunks_mapping[chunk_data.get("chunk_id")] = chunk_data.get("text", "")
+
+        # 3. Select 5% random samples for Spot Checking
+        all_pairs = []
+        with open(sft_path, "r", encoding="utf-8") as f:
+            for line in f:
+                all_pairs.append(json.loads(line))
+        
+        sample_size = max(1, int(len(all_pairs) * 0.05))
+        import random
+        sampled_pairs = random.sample(all_pairs, sample_size)
+        
+        logger.info(f"Running LLM-as-a-Judge on {sample_size} samples...")
+        
+        # 4. Run LLM evaluation concurrently
+        tasks = []
+        for pair in sampled_pairs:
+            chunk_id = pair.get("source_chunk_id")
+            source_text = chunks_mapping.get(chunk_id, "No source text available.")
+            tasks.append(self._evaluate_single_pair(pair, source_text))
+            
+        eval_results = await asyncio.gather(*tasks)
+        factual_count = sum(eval_results)
+        factual_rate = round((factual_count / len(eval_results)) * 100, 2) if eval_results else 0.0
+
+        # 5. Generate Markdown Report
+        report_content = f"""# Dataset Health Report
+
+## 1. Sanitization Overview
+* **Total Raw Pairs Processed:** {sanitization_stats.get('total_processed', 0)}
+* **Pairs Passed:** {sanitization_stats.get('passed', 0)}
+* **Rejection Rate:** {round(100 - (sanitization_stats.get('passed', 0) / max(1, sanitization_stats.get('total_processed', 1)) * 100), 2)}%
+  * Rejected due to bad structure: {sanitization_stats.get('rejected_structure', 0)}
+  * Rejected due to length: {sanitization_stats.get('rejected_length', 0)}
+  * Rejected due to AI Refusal: {sanitization_stats.get('rejected_refusal', 0)}
+  * Rejected due to Duplication: {sanitization_stats.get('rejected_duplicate', 0)}
+
+## 2. Token & Length Statistics (Passed SFT Data)
+* **Total Valid Pairs:** {stats['total_pairs']}
+* **Average Answer Length (Words):** {stats['avg_words']}
+* **Max Answer Length:** {stats['max_words']}
+* **Min Answer Length:** {stats['min_words']}
+
+## 3. Spot-Checking (LLM-as-a-Judge)
+* **Samples Evaluated (5%):** {sample_size}
+* **Factual Accuracy Rate:** {factual_rate}%
+* **Status:** {'✅ PASSED' if factual_rate >= 90.0 else '⚠️ WARNING (Accuracy < 90%)'}
+
+*Generated automatically by LLM Data Foundry.*
+"""
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(report_content)
+            
+        logger.info(f"Dataset health report saved to {report_path}")
