@@ -115,7 +115,7 @@ class DocumentProcessor:
             raise
         return text
     
-    def process_file(self, file_path: Union[str, Path]) -> List[RawChunk]:
+    def process_file(self, file_path: Union[str, Path], output_file: Union[str, Path, type(None)] = None) -> List[RawChunk]:
         """
         Reads a document, splits it, and returns standardized RawChunk objects.
         
@@ -153,5 +153,15 @@ class DocumentProcessor:
                 }
             )
             raw_chunks.append(chunk)
+        if output_file:
+            output_path = Path(output_file)
+            try:
+                with open(output_path, "w", encoding="utf-8") as f:
+                    for chunk in raw_chunks:
+                        # RawChunk это Pydantic модель, используем model_dump_json()
+                        f.write(chunk.model_dump_json() + "\n")
+                logger.info(f"Successfully saved {len(raw_chunks)} chunks to {output_path}")
+            except Exception as e:
+                logger.error(f"Failed to write chunks to {output_path}: {e}")
 
         return raw_chunks

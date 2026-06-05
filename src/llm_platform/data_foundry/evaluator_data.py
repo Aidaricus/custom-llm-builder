@@ -1,6 +1,7 @@
 import json
 import logging
 import asyncio
+import yaml
 from pathlib import Path
 from typing import Dict, List, Any
 from pydantic import BaseModel, Field
@@ -28,16 +29,18 @@ class DatasetEvaluator:
     def __init__(
         self, 
         model_name: str,
+        templates_dir: str | Path = "src/llm_platform/templates",
         max_concurrent_requests: int = 2
     ):
         self.client = LLMClient(model_name=model_name)
         self.semaphore = asyncio.Semaphore(max_concurrent_requests)
-        self.system_prompt = (
-            "You are a strict data quality editor. Your task is to evaluate whether the Assistant's "
-            "answer to the User's question is factually accurate and free of hallucinations, "
-            "based STRICTLY on the provided Source Text.\n"
-            "Return the result in JSON format."
-        )
+        
+        self.templates_dir = Path(templates_dir)
+        
+        prompt_path = self.templates_dir / "prompts" / "judge_system.yaml"
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            prompt_data = yaml.safe_load(f)
+            self.system_prompt = prompt_data.get("system_prompt", "")
 
     def _calculate_basic_stats(self, dataset_file: Path) -> Dict[str, Any]:
         """Calculates length distributions and counts for the dataset."""
@@ -95,13 +98,15 @@ class DatasetEvaluator:
         self, 
         sanitized_sft_file: str | Path, 
         chunks_file: str | Path,
-        report_output_file: str | Path,
-        sanitization_stats: Dict[str, int]
+        report_output_file: str | Path = None,
+        sanitization_stats: Dict[str, int] = None,
     ):
         """Generates the final dataset_health.md report."""
+        if sanitization_stats is None:
+            sanitization_stats = {}
+            
         sft_path = Path(sanitized_sft_file)
         chunks_path = Path(chunks_file)
-        report_path = Path(report_output_file)
 
         # 1. Calculate basic statistics
         stats = self._calculate_basic_stats(sft_path)
@@ -138,31 +143,38 @@ class DatasetEvaluator:
         factual_rate = round((factual_count / len(eval_results)) * 100, 2) if eval_results else 0.0
 
         # 5. Generate Markdown Report
-        report_content = f"""# Dataset Health Report
+        status_icon = '✅ PASSED' if factual_rate >= 90.0 else '⚠️ WARNING (Accuracy < 90%)'
+        rejection_rate = round(100 - (sanitization_stats.get('passed', 0) / max(1, sanitization_stats.get('total_processed', 1)) * 100), 2)
 
-## 1. Sanitization Overview
-* **Total Raw Pairs Processed:** {sanitization_stats.get('total_processed', 0)}
-* **Pairs Passed:** {sanitization_stats.get('passed', 0)}
-* **Rejection Rate:** {round(100 - (sanitization_stats.get('passed', 0) / max(1, sanitization_stats.get('total_processed', 1)) * 100), 2)}%
-  * Rejected due to bad structure: {sanitization_stats.get('rejected_structure', 0)}
-  * Rejected due to length: {sanitization_stats.get('rejected_length', 0)}
-  * Rejected due to AI Refusal: {sanitization_stats.get('rejected_refusal', 0)}
-  * Rejected due to Duplication: {sanitization_stats.get('rejected_duplicate', 0)}
-
-## 2. Token & Length Statistics (Passed SFT Data)
-* **Total Valid Pairs:** {stats['total_pairs']}
-* **Average Answer Length (Words):** {stats['avg_words']}
-* **Max Answer Length:** {stats['max_words']}
-* **Min Answer Length:** {stats['min_words']}
-
-## 3. Spot-Checking (LLM-as-a-Judge)
-* **Samples Evaluated (5%):** {sample_size}
-* **Factual Accuracy Rate:** {factual_rate}%
-* **Status:** {'✅ PASSED' if factual_rate >= 90.0 else '⚠️ WARNING (Accuracy < 90%)'}
-
-*Generated automatically by LLM Data Foundry.*
-"""
-        with open(report_path, "w", encoding="utf-8") as f:
-            f.write(report_content)
+        report_template_path = self.templates_dir / "reports" / "dataset_health.md"
+        with open(report_template_path, "r", encoding="utf-8") as f:
+            template_content = f.read()
             
-        logger.info(f"Dataset health report saved to {report_path}")
+        report_content = template_content.format(
+            total_processed=sanitization_stats.get('total_processed', 0),
+            passed=sanitization_stats.get('passed', 0),
+            rejection_rate=rejection_rate,
+            rejected_structure=sanitization_stats.get('rejected_structure', 0),
+            rejected_length=sanitization_stats.get('rejected_length', 0),
+            rejected_refusal=sanitization_stats.get('rejected_refusal', 0),
+            rejected_duplicate=sanitization_stats.get('rejected_duplicate', 0),
+            total_pairs=stats.get('total_pairs', 0),
+            avg_words=stats.get('avg_words', 0),
+            max_words=stats.get('max_words', 0),
+            min_words=stats.get('min_words', 0),
+            sample_size=sample_size,
+            factual_rate=factual_rate,
+            status_icon=status_icon
+        )
+
+        if report_output_file:
+            report_path = Path(report_output_file)
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write(report_content)
+            logger.info(f"Dataset health report saved to {report_path}")
+            
+        return {
+            "factual_rate": factual_rate,
+            "report_content": report_content
+        }
+        

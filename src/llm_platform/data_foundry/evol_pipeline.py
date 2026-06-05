@@ -1,5 +1,6 @@
 import asyncio
 import json
+import yaml
 import logging
 import random
 import uuid
@@ -15,16 +16,11 @@ logger = logging.getLogger(__name__)
 class EvolPipeline:
     def __init__(
         self,
-        input_file: str | Path,
-        output_file: str | Path,
         prompts_file: str | Path,
-        model_name: str = "google/gemma-4-31b-it:free",
+        model_name: str,
         max_concurrent_requests: int = 3,
     ):
-        self.input_file = Path(input_file)
-        self.output_file = Path(output_file)
         self.prompts_file = Path(prompts_file)
-        
         self.client = LLMClient(model_name=model_name)
         self.semaphore = asyncio.Semaphore(max_concurrent_requests)
         
@@ -52,16 +48,11 @@ class EvolPipeline:
 
         user_prompt = f"Оригинальный вопрос:\n{original_q}\n\nОригинальный ответ:\n{original_a}"
 
-        mutation_name, base_system_prompt = random.choice(list(self.evol_prompts.items()))
+        mutations = {k: v for k, v in self.evol_prompts.items() if k != "global_rules"}
+        mutation_name, base_system_prompt = random.choice(list(mutations.items()))
 
-        # ИСПРАВЛЕНИЕ 1: Усиленный системный промпт для защиты от галлюцинаций
-        system_prompt_enhanced = (
-            f"{base_system_prompt}\n\n"
-            "CRITICAL RULES FOR OUTPUT:\n"
-            "1. The 'user' role MUST contain ONLY the new, realistic question. NEVER include your instructions or meta-prompts (like 'Rewrite this' or 'Add a table') in the user message.\n"
-            "2. The 'assistant' role MUST contain the detailed, accurate answer to the new question.\n"
-            "3. Do NOT wrap the entire dialogue inside the 'assistant' role."
-        )
+        global_rules = self.evol_prompts.get("global_rules", "")
+        system_prompt_enhanced = f"{base_system_prompt}\n\n{global_rules}"
 
         user_prompt = f"Original Question:\n{original_q}\n\nOriginal Answer:\n{original_a}\n\nGenerate the evolved User-Assistant pair."
 
@@ -102,13 +93,14 @@ class EvolPipeline:
                 logger.error(f"Failed to evolve pair {pair.pair_id}: {e}")
                 return None
 
-    async def run_evolution(self):
-        if not self.input_file.exists():
-            logger.error(f"Input file not found: {self.input_file}")
-            return
+    async def run_evolution(self, input_file: str | Path, output_file: str | Path | None = None) -> List[SFTPair]:
+        input_path = Path(input_file)
+        if not input_path.exists():
+            logger.error(f"Input file not found: {input_path}")
+            return []
 
         base_pairs: List[SFTPair] = []
-        with open(self.input_file, "r", encoding="utf-8") as f:
+        with open(input_path, "r", encoding="utf-8") as f:
             for line in f:
                 try:
                     pair = SFTPair.model_validate_json(line)
@@ -124,9 +116,12 @@ class EvolPipeline:
 
         valid_evolved_pairs: List[SFTPair] = [res for res in results if res is not None]
 
-        logger.info(f"Writing {len(valid_evolved_pairs)} evolved pairs to {self.output_file}...")
-        with open(self.output_file, "w", encoding="utf-8") as f:
-            for pair in valid_evolved_pairs:
-                f.write(pair.model_dump_json() + "\n")
+        if output_file:
+            output_path = Path(output_file)
+            logger.info(f"Writing {len(valid_evolved_pairs)} evolved pairs to {output_path}...")
+            with open(output_path, "w", encoding="utf-8") as f:
+                for pair in valid_evolved_pairs:
+                    f.write(pair.model_dump_json() + "\n")
                 
         logger.info("Evolution pipeline finished successfully.")
+        return valid_evolved_pairs
