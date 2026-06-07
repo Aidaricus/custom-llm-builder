@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 from typing import List, Union
-
+import hashlib
 import fitz  # PyMuPDF
 from .schemas import RawChunk
 
@@ -143,8 +143,9 @@ class DocumentProcessor:
         for i, txt in enumerate(overlapped_texts):
             if not txt.strip():
                 continue
-                
+            deterministic_id = hashlib.md5(txt.encode('utf-8')).hexdigest()[:16]
             chunk = RawChunk(
+                chunk_id=f"chunk_{deterministic_id}",
                 text=txt,
                 source_doc=path.name,
                 metadata={

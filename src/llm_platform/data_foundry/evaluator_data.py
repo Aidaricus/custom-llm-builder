@@ -7,7 +7,8 @@ from typing import Dict, List, Any
 from pydantic import BaseModel, Field
 
 from src.llm_platform.data_foundry.llm_client import LLMClient
-
+from src.llm_platform.data_foundry.schemas import SFTPair, RawChunk
+from pydantic import ValidationError
 logger = logging.getLogger(__name__)
 
 
@@ -48,14 +49,11 @@ class DatasetEvaluator:
         with open(dataset_file, "r", encoding="utf-8") as f:
             for line in f:
                 try:
-                    data = json.loads(line)
-                    # Extract assistant's answer (works for both SFT and DPO structures if we adapt slightly, 
-                    # assuming SFT 'messages' format here)
-                    messages = data.get("messages", [])
-                    answer = next((m["content"] for m in messages if m["role"] == "assistant"), "")
+                    pair = SFTPair.model_validate_json(line)
+                    answer = next((m.content for m in pair.messages if m.role == "assistant"), "")
                     if answer:
                         lengths.append(len(answer.split()))
-                except json.JSONDecodeError:
+                except ValidationError:
                     continue
 
         if not lengths:
@@ -68,12 +66,10 @@ class DatasetEvaluator:
             "min_words": min(lengths)
         }
 
-    async def _evaluate_single_pair(self, pair: Dict, source_text: str) -> bool:
+    async def _evaluate_single_pair(self, pair: SFTPair, source_text: str) -> bool:
         """Runs a single LLM-as-a-Judge check."""
-        messages = pair.get("messages", [])
-        question = next((m["content"] for m in messages if m["role"] == "user"), "")
-        answer = next((m["content"] for m in messages if m["role"] == "assistant"), "")
-
+        question = next((m.content for m in pair.messages if m.role == "user"), "")
+        answer = next((m.content for m in pair.messages if m.role == "assistant"), "")
         user_prompt = (
             f"Source Text:\n{source_text}\n\n"
             f"User Question:\n{question}\n\n"
@@ -116,14 +112,20 @@ class DatasetEvaluator:
         if chunks_path.exists():
             with open(chunks_path, "r", encoding="utf-8") as f:
                 for line in f:
-                    chunk_data = json.loads(line)
-                    chunks_mapping[chunk_data.get("chunk_id")] = chunk_data.get("text", "")
+                    try:
+                        chunk = RawChunk.model_validate_json(line)
+                        chunks_mapping[chunk.chunk_id] = chunk.text
+                    except ValidationError:
+                        continue
 
         # 3. Select 5% random samples for Spot Checking
         all_pairs = []
         with open(sft_path, "r", encoding="utf-8") as f:
             for line in f:
-                all_pairs.append(json.loads(line))
+                try:
+                    all_pairs.append(SFTPair.model_validate_json(line))
+                except ValidationError:
+                    continue
         
         sample_size = max(1, int(len(all_pairs) * 0.05))
         import random
@@ -134,7 +136,7 @@ class DatasetEvaluator:
         # 4. Run LLM evaluation concurrently
         tasks = []
         for pair in sampled_pairs:
-            chunk_id = pair.get("source_chunk_id")
+            chunk_id = pair.source_chunk_id
             source_text = chunks_mapping.get(chunk_id, "No source text available.")
             tasks.append(self._evaluate_single_pair(pair, source_text))
             

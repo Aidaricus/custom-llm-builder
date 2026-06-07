@@ -97,12 +97,3 @@ class LLMRejectedResponse(BaseModel):
     reject_reason: str = Field(
         description="A brief explanation of the specific error made (e.g., 'factual error', 'superficial answer')"
     )
-
-class DPOTriplet(BaseModel):
-    """Structure of DPO Triplet for dataset storage"""
-    triplet_id: str
-    source_pair_id: str
-    prompt: str
-    chosen: str
-    rejected: str
-    reject_reason: str

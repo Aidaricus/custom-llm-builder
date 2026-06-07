@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from typing import Type, TypeVar
 
 import openai
@@ -21,18 +22,16 @@ T = TypeVar("T", bound=BaseModel)
 
 class LLMClient:
     def __init__(self, model_name: str = "google/gemma-4-31b-it:free"):
-        if not OPENROUTER_API_KEY:
-            raise ValueError(
-                "OPENROUTER_API_KEY is not set. Please check your .env file."
-            )
+        
         self.model_name = model_name
-
+        self.base_url = os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
+        self.api_key = os.getenv("LLM_API_KEY", "dummy-key-for-vllm")
         self.client = AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=OPENROUTER_API_KEY,
+            base_url=self.base_url,
+            api_key=self.api_key,
         )
 
-        logger.info(f"LLMClient initialized with model: {self.model_name}")
+        logger.info(f"LLMClient initialized: {self.base_url} | Model: {self.model_name}")
 
     def _log_retry(retry_state):
         logger.warning(
@@ -77,7 +76,7 @@ class LLMClient:
                 # Force JSON output mode (supported by most OpenRouter models)
                 response_format={"type": "json_object"},
                 temperature=0.3, # Low temperature for more deterministic/factual output
-                max_tokens=4000,
+                max_tokens=1500,
             )
 
             raw_content = response.choices[0].message.content

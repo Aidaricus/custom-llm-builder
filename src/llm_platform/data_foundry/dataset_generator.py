@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import uuid
+from tqdm import tqdm
 import yaml
 from pathlib import Path
 from typing import List, Optional
@@ -75,28 +76,48 @@ class DatasetGenerator:
             for line in f:
                 try:
                     chunk_data = json.loads(line)
-                    # Восстанавливаем объект RawChunk из JSON
                     chunk = RawChunk(**chunk_data)
                     all_chunks.append(chunk)
                 except json.JSONDecodeError:
                     continue
+        
+        processed_chunk_ids = set()
+        if output_path.exists():
+            with open(output_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        # Используем Pydantic для надежного парсинга
+                        pair = SFTPair.model_validate_json(line)
+                        processed_chunk_ids.add(pair.source_chunk_id)
+                    except Exception:
+                        continue
+            
+            logger.info(f"Found existing dataset. Resuming... {len(processed_chunk_ids)} chunks already processed.")
 
-        logger.info(f"Loaded {len(all_chunks)} chunks. Starting LLM generation...")
+        chunks_to_process = [c for c in all_chunks if c.chunk_id not in processed_chunk_ids]
+        
+        if not chunks_to_process:
+            logger.info("All chunks have already been processed. Skipping generation.")
+            return []
 
-        # 2. Асинхронная генерация
-        tasks = [self._process_single_chunk(chunk) for chunk in all_chunks]
-        results = await asyncio.gather(*tasks)
+        logger.info(f"Loaded {len(all_chunks)} total chunks. Remaining to process: {len(chunks_to_process)}.")
 
-        valid_pairs: List[SFTPair] = [res for res in results if res is not None]
 
-        # 3. Сохранение артефакта
-        logger.info(f"Writing dataset to {output_path}...")
+        tasks = [self._process_single_chunk(chunk) for chunk in chunks_to_process]
+        valid_pairs: List[SFTPair] = []
+
         try:
-            with open(output_path, "w", encoding="utf-8") as f:
-                for pair in valid_pairs:
-                    f.write(pair.model_dump_json() + "\n")
-            logger.info(f"Successfully generated and saved {len(valid_pairs)} SFT pairs.")
+            # ВАЖНО: открываем в режиме "a" (дозапись), чтобы не стереть предыдущие 31 пару
+            with open(output_path, "a", encoding="utf-8") as f:
+                for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="SFT Generation"):
+                    res = await coro
+                    if res is not None:
+                        valid_pairs.append(res)
+                        f.write(res.model_dump_json() + "\n")
+                        f.flush() 
+
+            logger.info(f"Successfully generated and appended {len(valid_pairs)} new SFT pairs.")
         except Exception as e:
-            logger.error(f"Failed to save SFT dataset: {e}")
+            logger.error(f"Pipeline interrupted or failed during generation: {e}")
 
         return valid_pairs

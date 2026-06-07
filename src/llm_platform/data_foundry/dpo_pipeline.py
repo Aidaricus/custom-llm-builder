@@ -6,7 +6,7 @@ from typing import List, Optional
 import yaml
 
 from src.llm_platform.data_foundry.llm_client import LLMClient
-from src.llm_platform.data_foundry.schemas import SFTPair, DPOTriplet, LLMRejectedResponse
+from src.llm_platform.data_foundry.schemas import SFTPair, DPOTriplet, LLMRejectedResponse, Message
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +69,10 @@ class DPOPipeline:
                 triplet = DPOTriplet(
                     triplet_id=f"dpo_{uuid.uuid4().hex[:8]}",
                     source_pair_id=pair.pair_id,
-                    prompt=prompt,
-                    chosen=chosen,
-                    rejected=llm_response.rejected_text,
+                    prompt=[Message(role="user", content=prompt)],
+                    chosen=[Message(role="assistant", content=chosen)],
+                    rejected=[Message(role="assistant", content=llm_response.rejected_text)],
                     reject_reason=llm_response.reject_reason
-                )
                 
                 logger.debug(f"Generated DPO triplet for source pair {pair.pair_id}")
                 return triplet

@@ -4,6 +4,10 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any
 
+
+from src.llm_platform.data_foundry.schemas import SFTPair, DPOTriplet
+from pydantic import ValidationError
+
 logger = logging.getLogger(__name__)
 
 
@@ -78,11 +82,10 @@ class DatasetSanitizer:
             for line in f:
                 stats["total_processed"] += 1
                 try:
-                    pair = json.loads(line)
-                    messages = pair.get("messages", [])
+                    pair = SFTPair.model_validate_json(line)
                     
-                    user_msg = next((m["content"] for m in messages if m["role"] == "user"), "")
-                    assistant_msg = next((m["content"] for m in messages if m["role"] == "assistant"), "")
+                    user_msg = next((m.content for m in pair.messages if m.role == "user"), "")
+                    assistant_msg = next((m.content for m in pair.messages if m.role == "assistant"), "")
 
                     if not user_msg or not assistant_msg:
                         stats["rejected_structure"] += 1
@@ -114,14 +117,14 @@ class DatasetSanitizer:
                     valid_pairs.append(pair)
                     stats["passed"] += 1
 
-                except json.JSONDecodeError:
+                except ValidationError:
                     stats["rejected_structure"] += 1
                     continue
         
         # Сохраняем очищенный датасет
         with open(output_file, "w", encoding="utf-8") as f:
             for pair in valid_pairs:
-                f.write(json.dumps(pair, ensure_ascii=False) + "\n")
+                f.write(pair.model_dump_json() + "\n")
 
         logger.info(f"SFT Sanitization complete. Stats: {stats}")
         return stats
@@ -153,11 +156,11 @@ class DatasetSanitizer:
             for line in f:
                 stats["total_processed"] += 1
                 try:
-                    triplet = json.loads(line)
-                    prompt = triplet.get("prompt", "")
-                    chosen = triplet.get("chosen", "")
-                    rejected = triplet.get("rejected", "")
-
+                    triplet = DPOTriplet.model_validate_json(line)
+                    # Вытаскиваем контент из первого сообщения в списках
+                    prompt = triplet.prompt[0].content if triplet.prompt else ""
+                    chosen = triplet.chosen[0].content if triplet.chosen else ""
+                    rejected = triplet.rejected[0].content if triplet.rejected else ""
                     if not prompt or not chosen or not rejected:
                         stats["rejected_structure"] += 1
                         continue
@@ -183,13 +186,13 @@ class DatasetSanitizer:
                     valid_triplets.append(triplet)
                     stats["passed"] += 1
 
-                except json.JSONDecodeError:
+                except ValidationError:
                     stats["rejected_structure"] += 1
                     continue
         
         with open(output_file, "w", encoding="utf-8") as f:
             for triplet in valid_triplets:
-                f.write(json.dumps(triplet, ensure_ascii=False) + "\n")
+                f.write(triplet.model_dump_json() + "\n")
 
         logger.info(f"DPO Sanitization complete. Stats: {stats}")
         return stats
