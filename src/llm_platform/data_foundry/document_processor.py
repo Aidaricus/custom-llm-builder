@@ -25,83 +25,66 @@ class DocumentProcessor:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         # Hierarchy of separators: Paragraphs -> Lines -> Sentences -> Words
-        self.separators = [". ","\n", " ", ""]
+        self.separators = ["\n\n", "\n", ". ", " "]
 
     def _split_text(self, text: str, separators: List[str]) -> List[str]:
         """Recursively splits text to maintain semantic boundaries."""
-        if len(text) < self.chunk_size or not separators:
+        if len(text) <= self.chunk_size or not separators:
             return [text]
-        
+            
         separator = separators[0]
-        splits = text.split(separator)
-
-        if len(splits) == 1:
+        if separator not in text:
             return self._split_text(text, separators[1:])
+            
+        splits = text.split(separator)
+        good_splits = []
         
-        chunks = []
-        current_chunk = ""
-
         for part in splits:
             part_with_sep = part + separator if part != splits[-1] else part
-
-            if len(current_chunk) + len(part_with_sep) <= self.chunk_size:
-                current_chunk += part_with_sep
-            else:
-                if current_chunk:
-                    chunks.append(current_chunk.strip())
-                current_chunk = part_with_sep
-
-        if current_chunk:
-            chunks.append(current_chunk.strip())
-
-        final_chunks = []
-        for chunk in chunks:
-            if len(chunk) > self.chunk_size:
-                final_chunks.extend(self._split_text(chunk, separators[1:]))
-            else:
-                final_chunks.append(chunk)
-
-        return final_chunks
-    
-    def _apply_overlap(self, text_chunks: List[str]) -> List[str]:
-        """Applies a sliding window overlap to adjacent chunks to prevent context loss."""
-        if not text_chunks:
-            return []
             
-        overlapped_chunks = []
-        for i in range(len(text_chunks)):
-            if i == 0:
-                overlapped_chunks.append(text_chunks[i])
-                continue
-
-            # Take the end of the previous chunk as the overlap prefix
-            prev_chunk = text_chunks[i-1]
-            if len(prev_chunk) > self.chunk_overlap:
-                rough_overlap = prev_chunk[-self.chunk_overlap:]
-
-                # Find the first space to avoid starting with a cut word (like "aded")
-                first_space = rough_overlap.find(" ")
-                if first_space != -1:
-                    overlap_prefix = rough_overlap[first_space:].lstrip()
+            if len(part_with_sep) > self.chunk_size:
+                if len(separators) > 1:
+                    good_splits.extend(self._split_text(part_with_sep, separators[1:]))
                 else:
-                    overlap_prefix = rough_overlap
+                    good_splits.append(part_with_sep)
             else:
-                overlap_prefix = prev_chunk
-
-            current_chunk = overlap_prefix + " " + text_chunks[i]
-            # Ensure we don't massively exceed chunk_size due to overlap
-            current_chunk = current_chunk.replace("\n", " ").replace("  ", " ")
-
-            if len(current_chunk) > self.chunk_size + self.chunk_overlap:
-                current_chunk = current_chunk[:self.chunk_size]
-                # Also ensure we don't end on a cut word
-                last_space = current_chunk.rfind(" ")
-                if last_space != -1:
-                    current_chunk = current_chunk[:last_space]
+                if part_with_sep.strip():
+                    good_splits.append(part_with_sep)
                 
-            overlapped_chunks.append(current_chunk.strip())
+        return good_splits
+    
+    def _merge_splits_with_overlap(self, splits: List[str]) -> List[str]:
+        """Combines semantic units into chunks, applying overlap via whole units."""
+        chunks = []
+        current_chunk = []
+        current_length = 0
+        
+        for split in splits:
+            split_len = len(split)
             
-        return overlapped_chunks
+            if current_length + split_len > self.chunk_size and current_length > 0:
+                chunks.append("".join(current_chunk).strip())
+                
+                overlap_length = 0
+                overlap_chunk = []
+                
+                for prev_split in reversed(current_chunk):
+                    if overlap_length + len(prev_split) <= self.chunk_overlap:
+                        overlap_chunk.insert(0, prev_split)
+                        overlap_length += len(prev_split)
+                    else:
+                        break
+                
+                current_chunk = overlap_chunk
+                current_length = overlap_length
+                
+            current_chunk.append(split)
+            current_length += split_len
+            
+        if current_chunk:
+            chunks.append("".join(current_chunk).strip())
+            
+        return chunks
     
     def _read_pdf(self, file_path: Path) -> str:
         """Extracts plain text from a PDF file."""
@@ -109,7 +92,12 @@ class DocumentProcessor:
         try:
             with fitz.open(str(file_path)) as doc:
                 for page in doc:
-                    text += page.get_text("text") + "\n"
+                    blocks = page.get_text("blocks")
+                    blocks.sort(key=lambda b: (b[1], b[0]))
+                    for b in blocks:
+                        block_text = b[4].strip()
+                        if block_text:
+                            text += block_text + "\n\n"
         except Exception as e:
             logger.error(f"Failed to read PDF {file_path}: {e}")
             raise
@@ -136,8 +124,8 @@ class DocumentProcessor:
             with open(path, "r", encoding="utf-8") as f:
                 full_text = f.read()
 
-        raw_text_chunks = self._split_text(full_text, self.separators)
-        overlapped_texts = self._apply_overlap(raw_text_chunks)
+        semantic_splits = self._split_text(full_text, self.separators)
+        overlapped_texts = self._merge_splits_with_overlap(semantic_splits)
         
         raw_chunks = []
         for i, txt in enumerate(overlapped_texts):
