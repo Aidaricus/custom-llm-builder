@@ -63,6 +63,8 @@ def parse_args():
         default="all", 
         help="Comma-separated steps to run: chunk,generate,evolve,evaluate. Default is 'chunk,generate,evaluate'."
     )
+
+    parser.add_argument("--rag", action="store_true", help="Включить генерацию RAG датасета")
     
     return parser.parse_args()
 
@@ -89,12 +91,12 @@ async def async_main(args):
 
     if run_all or "chunk" in steps:
         logger.info(">>> STEP 1: Document Chunking")
-        processor = DocumentProcessor(chunk_size=800, chunk_overlap=150)
+        processor = DocumentProcessor(chunk_size=500, chunk_overlap=100)
         processor.process_file(args.input, output_file=chunks_file)
 
     if run_all or "generate" in steps:
         logger.info(">>> STEP 2: SFT Generation")
-        generator = DatasetGenerator(model_name=args.model, templates_dir=args.templates_dir)
+        generator = DatasetGenerator(model_name=args.model, templates_dir=args.templates_dir, rag_mode=args.rag)
         await generator.generate_dataset(chunks_file=chunks_file, output_file=sft_base_file)
         current_dataset = sft_base_file # Обновляем указатель
 

@@ -97,3 +97,8 @@ class LLMRejectedResponse(BaseModel):
     reject_reason: str = Field(
         description="A brief explanation of the specific error made (e.g., 'factual error', 'superficial answer')"
     )
+
+
+class RAGResponse(BaseModel):
+    user_question: str = Field(description="Generated user question.")
+    assistant_answer: str = Field(description="Generated assistant answer.")

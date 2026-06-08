@@ -2,13 +2,15 @@ import asyncio
 import json
 import logging
 import uuid
+import random
 from tqdm import tqdm
 import yaml
 from pathlib import Path
 from typing import List, Optional
 
 from src.llm_platform.data_foundry.llm_client import LLMClient
-from src.llm_platform.data_foundry.schemas import SFTPair, LLMGeneratedContent, RawChunk
+from src.llm_platform.data_foundry.schemas import SFTPair, LLMGeneratedContent, RawChunk, RAGResponse
+
 
 logger = logging.getLogger(__name__)
 
@@ -22,37 +24,77 @@ class DatasetGenerator:
         model_name: str,
         templates_dir: str | Path,
         max_concurrent_requests: int = 5,
+        rag_mode: bool = False,
     ):
         self.client = LLMClient(model_name=model_name)
         self.semaphore = asyncio.Semaphore(max_concurrent_requests)
         self.templates_dir = Path(templates_dir)
+        self.rag_mode = rag_mode
         
-        # Загружаем промпт из конфигурации
-        prompt_path = self.templates_dir / "prompts" / "generator_system.yaml"
+
+        self.prompts = {}
+
+        if self.rag_mode:
+            pos_path = self.templates_dir / "prompts" / "rag" / "positive.yaml"
+            neg_path = self.templates_dir / "prompts" / "rag" / "negative.yaml"
+            
+            self.prompts["rag_positive"] = self._load_yaml_prompt(pos_path, "Fallback positive")
+            self.prompts["rag_negative"] = self._load_yaml_prompt(neg_path, "Fallback negative")
+            logger.info("Initialized in RAG Mode. Loaded positive and negative prompts.")
+        else:
+            std_path = self.templates_dir / "prompts" / "generator_system.yaml"
+            self.prompts["standard"] = self._load_yaml_prompt(std_path, "Generate a QA pair based on the text.")
+            logger.info("Initialized in Standard Mode.")
+
+    def _load_yaml_prompt(self, path: Path, fallback: str) -> str:
+        """Helper to load system prompts from YAML files."""
         try:
-            with open(prompt_path, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 prompt_data = yaml.safe_load(f)
-                self.system_prompt = prompt_data.get("system_prompt", "")
+                return prompt_data.get("system_prompt", fallback)
         except Exception as e:
-            logger.error(f"Failed to load generator prompt from {prompt_path}: {e}")
-            self.system_prompt = "Generate a QA pair based on the text." # Fallback
+            logger.error(f"Failed to load prompt from {path}: {e}")
+            return fallback
     
     async def _process_single_chunk(self, chunk: RawChunk) -> Optional[SFTPair]:
         """Worker function to process one chunk through the LLM."""
         async with self.semaphore:
             try:
-                llm_content = await self.client.generate_structured_data(
-                    system_prompt=self.system_prompt,
-                    user_prompt=chunk.text,
-                    response_model=LLMGeneratedContent
-                )
+                if self.rag_mode:
+                    is_positive = random.choice([True, False])
+                    sys_prompt = self.prompts["rag_positive"] if is_positive else self.prompts["rag_negative"]
+                    
+                    llm_content = await self.client.generate_structured_data(
+                        system_prompt=sys_prompt,
+                        user_prompt=f"Текст:\n{chunk.text}",
+                        response_model=RAGResponse
+                    )
+                    
+                    rag_system_prompt = (
+                        "Отвечай на вопросы пользователя, используя только предоставленный ниже контекст. "
+                        "Если ответа нет в контексте, вежливо сообщи об этом и не выдумывай информацию.\n\n"
+                        f"Контекст:\n{chunk.text}"
+                    )
+                    
+                    messages = [
+                        {"role": "system", "content": rag_system_prompt},
+                        {"role": "user", "content": llm_content.user_question},
+                        {"role": "assistant", "content": llm_content.assistant_answer}
+                    ]
+                else:
+                    llm_content = await self.client.generate_structured_data(
+                        system_prompt=self.prompts["standard"],
+                        user_prompt=chunk.text,
+                        response_model=LLMGeneratedContent
+                    )
+                    messages = llm_content.messages
                 # chunk_id = f"chunk_{abs(hash(chunk.text)) % 1000000:06d}"
                 pair_id = f"pair_{uuid.uuid4().hex[:8]}"
 
                 pair = SFTPair(
                     pair_id=pair_id,
                     source_chunk_id=chunk.chunk_id,
-                    messages=llm_content.messages,
+                    messages=messages,
                     is_evolved=False
                 )
 

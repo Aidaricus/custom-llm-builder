@@ -25,7 +25,7 @@ class DocumentProcessor:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         # Hierarchy of separators: Paragraphs -> Lines -> Sentences -> Words
-        self.separators = ["\n\n", "\n", ". ", " "]
+        self.separators = [". ","\n", " ", ""]
 
     def _split_text(self, text: str, separators: List[str]) -> List[str]:
         """Recursively splits text to maintain semantic boundaries."""
