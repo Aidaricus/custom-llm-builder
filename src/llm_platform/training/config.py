@@ -32,7 +32,15 @@ class TrainingConfigParams(BaseModel):
     num_train_epochs: int = Field(default=3, description="Total number of training epochs")
     logging_steps: int = Field(default=10, description="Log metrics every X steps")
     save_steps: int = Field(default=100, description="Save checkpoint every X steps")
-    report_to: str = Field(default="none", description="Integration to report metrics (e.g., 'wandb' or 'none')")
+    report_to: str = Field(default="tensorboard", description="Integration to report metrics (e.g., 'wandb', 'tensorboard')")
+    
+    optim: str = Field(default="paged_adamw_32bit", description="Optimizer type")
+    bf16: bool = Field(default=True, description="Use bfloat16 precision")
+    fp16: bool = Field(default=False, description="Use fp16 precision (if bf16 is not supported)")
+    max_grad_norm: float = Field(default=0.3, description="Max gradient norm")
+    warmup_ratio: float = Field(default=0.03, description="Linear warmup over warmup_ratio fraction of total steps")
+    lr_scheduler_type: str = Field(default="cosine", description="Learning rate scheduler type")
+    gradient_checkpointing: bool = Field(default=True, description="Enable gradient checkpointing to save memory")
 
 class SFTConfig(BaseModel):
     """Main configuration class that holds all sub-configs."""

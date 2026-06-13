@@ -24,4 +24,11 @@ training:
   num_train_epochs: 3
   logging_steps: 5
   save_steps: 50
-  report_to: "none"
+  report_to: "tensorboard"
+  optim: "paged_adamw_32bit"
+  bf16: true                          # Для старых видеокарт ставить false, а fp16: true
+  fp16: false
+  max_grad_norm: 0.3
+  warmup_ratio: 0.03
+  lr_scheduler_type: "cosine"
+  gradient_checkpointing: true

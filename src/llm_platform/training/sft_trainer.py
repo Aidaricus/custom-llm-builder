@@ -93,12 +93,13 @@ class LoRAForgeTrainer:
             logging_steps=self.config.training.logging_steps,
             save_steps=self.config.training.save_steps,
             report_to=self.config.training.report_to,
-            gradient_checkpointing=True,         # Экономит ~30% VRAM
-            optim="paged_adamw_32bit",           # Выгружает состояния оптимизатора в CPU RAM при пиках
-            bf16=True,                           # Включаем bfloat16
-            max_grad_norm=0.3,                   # Обрезка градиентов от "взрывов"
-            warmup_ratio=0.03,                   # Плавный разогрев LR
-            lr_scheduler_type="cosine",          # Косинусное затухание LR
+            gradient_checkpointing=self.config.training.gradient_checkpointing,
+            optim=self.config.training.optim,
+            bf16=self.config.training.bf16,
+            fp16=self.config.training.fp16,
+            max_grad_norm=self.config.training.max_grad_norm,
+            warmup_ratio=self.config.training.warmup_ratio,
+            lr_scheduler_type=self.config.training.lr_scheduler_type,
         )
 
         logger.info("Initializing SFTTrainer")
