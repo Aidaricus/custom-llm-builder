@@ -9,6 +9,7 @@ from src.llm_platform.data_foundry.document_processor import DocumentProcessor
 from src.llm_platform.data_foundry.dataset_generator import DatasetGenerator
 from src.llm_platform.data_foundry.evol_pipeline import EvolPipeline
 from src.llm_platform.data_foundry.evaluator_data import DatasetEvaluator
+from src.llm_platform.data_foundry.dataset_formatter import DatasetFormatter
 
 # Настройка глобального логгера для консоли
 logging.basicConfig(
@@ -22,8 +23,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="LLM Data Foundry: End-to-end pipeline for generating and evaluating SFT datasets."
     )
-    
-    # Обязательные аргументы
+    subparsers = parser.add_subparsers(dest="command", required=True)
     parser.add_argument(
         "--input", 
         type=Path, 
@@ -36,8 +36,6 @@ def parse_args():
         required=True,
         help="Directory where intermediate artifacts and final dataset will be saved."
     )
-    
-    # Конфигурация модели и шаблонов
     parser.add_argument(
         "--model", 
         type=str, 
@@ -50,22 +48,24 @@ def parse_args():
         default=Path("src/llm_platform/templates"), 
         help="Path to the directory containing YAML templates."
     )
-    
     parser.add_argument(
         "--sanitize", 
         action="store_true", 
         help="Run DatasetSanitizer to filter out bad QA pairs before saving the final dataset."
     )
-
     parser.add_argument(
         "--steps", 
         type=str, 
         default="all", 
         help="Comma-separated steps to run: chunk,generate,evolve,evaluate. Default is 'chunk,generate,evaluate'."
     )
-
     parser.add_argument("--rag", action="store_true", help="Включить генерацию RAG датасета")
-    
+
+    fmt_parser = subparsers.add_parser("format", help="Format external raw datasets into target ChatML messages")
+    fmt_parser.add_argument("--input", type=str, required=True, help="Path to raw dataset")
+    fmt_parser.add_argument("--train-out", type=str, required=True, help="Path to save train dataset")
+    fmt_parser.add_argument("--test-out", type=str, required=True, help="Path to save test dataset")
+    fmt_parser.add_argument("--format", type=str, default="native", choices=["native", "alpaca", "sharegpt"], help="Input format type") 
     return parser.parse_args()
 
 async def async_main(args):
@@ -131,7 +131,17 @@ async def async_main(args):
 def main():
     args = parse_args()
     try:
-        asyncio.run(async_main(args))
+        if args.command == "generate":
+            asyncio.run(async_main(args))
+        elif args.command == "format":
+            logger.info(f"Starting formatting: {args.input} ({args.format} -> messages)")
+            formatter = DatasetFormatter()
+            formatter.format_sft(
+                input_file=args.input,
+                train_file=args.train_out,
+                test_file=args.test_out,
+                input_format=args.format
+            )
     except KeyboardInterrupt:
         logger.warning("Pipeline interrupted by user.")
         sys.exit(1)

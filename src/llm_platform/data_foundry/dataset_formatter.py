@@ -3,6 +3,7 @@ import logging
 import random
 from pathlib import Path
 from typing import List, Dict, Any
+from .adapters import get_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +32,24 @@ class DatasetFormatter:
         logger.info(f"Saved {len(train_data)} train rows to {train_file.name}")
         logger.info(f"Saved {len(test_data)} test rows to {test_file.name}")
 
-    def format_sft(self, input_file: str | Path, train_file: str | Path, test_file: str | Path, train_ratio: float = 0.9):
+    def format_sft(
+            self,
+            input_file: str | Path,
+            train_file: str | Path,
+            test_file: str | Path,
+            train_ratio: float = 0.9,
+            input_format: str = "native"
+    ):
         """Formats SFT data to standard 'messages' format and splits it."""
         input_file = Path(input_file)
         if not input_file.exists():
             logger.error(f"Input file not found: {input_file}")
+            return
+
+        try:
+            adapter = get_adapter(input_format)
+        except ValueError as e:
+            logger.error(e)
             return
 
         formatted_data = []
@@ -43,9 +57,13 @@ class DatasetFormatter:
             for line in f:
                 try:
                     raw_data = json.loads(line)
+                    adapted_row = adapter(raw_data)
                     # For SFT, we only need the conversation history
                     formatted_data.append({"messages": raw_data.get("messages", [])})
+                    if adapted_row.get("messages"):
+                        formatted_data.append(adapted_row)
                 except json.JSONDecodeError:
+                    logger.warning("Failed to decode JSON line, skipping.")
                     continue
 
         self._split_and_save(formatted_data, Path(train_file), Path(test_file), train_ratio)
